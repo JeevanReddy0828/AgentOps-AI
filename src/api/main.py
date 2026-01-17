@@ -8,8 +8,9 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
 import uuid
+import os
 import structlog
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr
 
@@ -18,6 +19,13 @@ from src.rag.knowledge_base import KnowledgeBase, ContextRetriever
 from src.models.ticket import TicketStatus, TicketCategory, TicketPriority
 from src.utils.observability import setup_tracing, MetricsCollector
 
+# Import Anthropic
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+
 
 logger = structlog.get_logger(__name__)
 
@@ -25,12 +33,13 @@ logger = structlog.get_logger(__name__)
 orchestrator: Optional[AgentOrchestrator] = None
 knowledge_base: Optional[KnowledgeBase] = None
 metrics: Optional[MetricsCollector] = None
+anthropic_client: Optional[Any] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan management."""
-    global orchestrator, knowledge_base, metrics
+    global orchestrator, knowledge_base, metrics, anthropic_client
     
     logger.info("application_starting")
     
@@ -38,6 +47,15 @@ async def lifespan(app: FastAPI):
     knowledge_base = KnowledgeBase()
     orchestrator = AgentOrchestrator()
     metrics = MetricsCollector(agent_name="api")
+    
+    # Initialize Anthropic client
+    if ANTHROPIC_AVAILABLE:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if api_key:
+            anthropic_client = anthropic.Anthropic(api_key=api_key)
+            logger.info("anthropic_client_initialized")
+        else:
+            logger.warning("anthropic_api_key_not_set")
     
     # Setup tracing
     setup_tracing(service_name="agentops-ai")
@@ -121,6 +139,7 @@ class ChatResponse(BaseModel):
     response: str
     conversation_id: str
     suggested_actions: List[str] = []
+    ticket_created: Optional[str] = None
 
 
 class AnalyticsDashboard(BaseModel):
@@ -148,7 +167,8 @@ async def readiness_check():
     return {
         "status": "ready",
         "orchestrator": orchestrator is not None,
-        "knowledge_base": knowledge_base is not None
+        "knowledge_base": knowledge_base is not None,
+        "anthropic": anthropic_client is not None
     }
 
 
@@ -248,7 +268,6 @@ async def get_ticket(ticket_id: str):
         try:
             status = TicketStatus(raw_status).value
         except ValueError:
-            # If not a valid TicketStatus, use the raw value
             status = raw_status
         
         return TicketResponse(
@@ -323,38 +342,279 @@ async def trigger_resolution(ticket_id: str, background_tasks: BackgroundTasks):
 
 # ============== Chat Endpoints ==============
 
-@app.post("/api/v1/chat", response_model=ChatResponse)
-async def chat_with_assistant(request: ChatMessage):
-    """Chat with the AI IT support assistant."""
+# Store conversation history in memory (use Redis in production)
+conversation_history: Dict[str, List[Dict[str, str]]] = {}
+
+# Store context for ticket creation
+chat_context: Dict[str, Dict[str, Any]] = {}
+
+
+def extract_issue_from_history(history: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Extract issue details from conversation history."""
+    user_messages = [msg["content"] for msg in history if msg["role"] == "user"]
+    full_conversation = "\n".join(user_messages)
+    full_conversation_lower = full_conversation.lower()
+    
+    # Determine category
+    if any(word in full_conversation_lower for word in ["password", "login", "locked", "access", "authentication"]):
+        category = "access"
+        title = "Password/Login Issue"
+    elif any(word in full_conversation_lower for word in ["vpn", "network", "wifi", "internet", "connect", "connection"]):
+        category = "network"
+        title = "Network/VPN Connectivity Issue"
+    elif any(word in full_conversation_lower for word in ["email", "outlook", "mail", "calendar"]):
+        category = "email"
+        title = "Email/Outlook Issue"
+    elif any(word in full_conversation_lower for word in ["install", "software", "application", "app", "update"]):
+        category = "software"
+        title = "Software Installation/Issue"
+    elif any(word in full_conversation_lower for word in ["computer", "laptop", "hardware", "printer", "monitor", "keyboard", "mouse"]):
+        category = "hardware"
+        title = "Hardware Issue"
+    else:
+        category = "other"
+        title = "IT Support Request"
+    
+    # Determine priority based on urgency words
+    if any(word in full_conversation_lower for word in ["urgent", "asap", "critical", "emergency", "immediately", "can't work"]):
+        priority = "high"
+    elif any(word in full_conversation_lower for word in ["important", "soon", "need"]):
+        priority = "medium"
+    else:
+        priority = "low"
+    
+    return {
+        "title": title,
+        "description": full_conversation,
+        "category": category,
+        "priority": priority
+    }
+
+
+def should_create_ticket(message: str, history: List[Dict[str, str]]) -> bool:
+    """Determine if user wants to create a ticket based on message and context."""
+    message_lower = message.lower()
+    
+    # Explicit ticket creation phrases
+    explicit_phrases = [
+        "create a ticket", "create ticket", "submit ticket", "open ticket",
+        "make a ticket", "need ticket", "want ticket", "yes create", "yes please create",
+        "please create", "create one", "make one", "open one", "submit one",
+        "need it support", "need help from it", "escalate", "talk to human",
+        "yes do it", "go ahead and create", "yes, create", "yep create",
+        "just create", "can you create", "please make", "i need a ticket"
+    ]
+    
+    if any(phrase in message_lower for phrase in explicit_phrases):
+        return True
+    
+    # Check if user is confirming after being asked about ticket creation
+    confirmation_phrases = ["yes", "yep", "yeah", "sure", "ok", "okay", "please", "do it", "go ahead"]
+    
+    if any(phrase in message_lower for phrase in confirmation_phrases):
+        # Check if the last assistant message mentioned ticket creation
+        for msg in reversed(history):
+            if msg["role"] == "assistant":
+                assistant_msg_lower = msg["content"].lower()
+                if any(phrase in assistant_msg_lower for phrase in ["create a ticket", "create a support ticket", "open a ticket", "submit a ticket"]):
+                    return True
+                break
+    
+    return False
+
+
+@app.post("/api/v1/chat")
+async def chat_with_assistant(request: ChatMessage, background_tasks: BackgroundTasks):
+    """Chat with the AI IT support assistant powered by Claude."""
     conversation_id = request.conversation_id or str(uuid.uuid4())
+    ticket_created = None
+    
+    # Get or create conversation history
+    if conversation_id not in conversation_history:
+        conversation_history[conversation_id] = []
+    
+    history = conversation_history[conversation_id]
+    
+    # Add user message to history
+    history.append({"role": "user", "content": request.message})
+    
+    # Check if user wants to create a ticket - do this BEFORE calling Claude
+    if should_create_ticket(request.message, history) and len(history) >= 2:
+        # Extract issue details from conversation
+        issue_info = extract_issue_from_history(history)
+        
+        # Create the ticket
+        ticket_id = f"INC{uuid.uuid4().hex[:8].upper()}"
+        created_at = datetime.utcnow().isoformat()
+        
+        ticket_data = {
+            "ticket_id": ticket_id,
+            "title": issue_info["title"],
+            "description": issue_info["description"],
+            "user_email": None,
+            "category": issue_info["category"],
+            "priority": issue_info["priority"],
+            "created_at": created_at,
+            "status": "new"
+        }
+        
+        orchestrator.store_ticket(ticket_id, ticket_data)
+        ticket_created = ticket_id
+        
+        # Start async processing
+        category_enum = None
+        if issue_info["category"] in ["network", "hardware", "software", "access", "email", "other"]:
+            category_enum = TicketCategory(issue_info["category"])
+        
+        background_tasks.add_task(
+            process_ticket_async,
+            ticket_id=ticket_id,
+            title=issue_info["title"],
+            description=issue_info["description"],
+            user_email=None,
+            category=category_enum,
+            priority=None
+        )
+        
+        logger.info("ticket_created_from_chat", ticket_id=ticket_id, conversation_id=conversation_id)
+        
+        response_text = f"""I've created support ticket **{ticket_id}** for you with the following details:
+
+**Issue:** {issue_info['title']}
+**Category:** {issue_info['category'].title()}
+**Priority:** {issue_info['priority'].title()}
+
+Our IT team will review your ticket and get back to you soon. You can track its progress in the Tickets tab.
+
+Is there anything else I can help you with?"""
+        
+        # Add assistant response to history
+        history.append({"role": "assistant", "content": response_text})
+        
+        return {
+            "response": response_text,
+            "conversation_id": conversation_id,
+            "suggested_actions": ["Check ticket status", "Ask another question"],
+            "ticket_created": ticket_id
+        }
+    
+    # Build suggested actions based on message content
+    suggested_actions = []
+    message_lower = request.message.lower()
+    
+    if any(word in message_lower for word in ["ticket", "create", "submit", "report"]):
+        suggested_actions.append("Create a ticket")
+    if any(word in message_lower for word in ["password", "reset", "forgot", "locked"]):
+        suggested_actions.append("Reset password")
+    if any(word in message_lower for word in ["vpn", "connect", "network", "wifi"]):
+        suggested_actions.append("Check VPN status")
+    if any(word in message_lower for word in ["search", "find", "how", "help"]):
+        suggested_actions.append("Search knowledge base")
+    
+    # If no specific actions detected, add defaults
+    if not suggested_actions:
+        suggested_actions = ["Create a ticket", "Search knowledge base"]
     
     try:
-        # Get relevant context from knowledge base
-        context = await knowledge_base.search(
-            query=request.message,
-            top_k=3
-        )
+        # Check if Anthropic client is available
+        if anthropic_client is None:
+            logger.warning("anthropic_client_not_available")
+            response_text = generate_fallback_response(request.message)
+        else:
+            # Call Claude API with tool use for ticket creation
+            system_prompt = """You are a helpful IT support assistant. Your role is to:
+
+1. Help users troubleshoot IT issues (VPN, passwords, software, hardware, network)
+2. Guide them through common solutions step by step
+3. Create support tickets when needed
+
+IMPORTANT RULES:
+- Be concise (2-4 sentences unless detailed instructions are needed)
+- If the user has already tried basic troubleshooting and it didn't work, IMMEDIATELY offer to create a ticket
+- Don't keep asking for more information if they've clearly explained the problem
+- When the user says "create a ticket", "yes create one", or confirms they want a ticket, acknowledge it directly
+
+For VPN issues specifically:
+- If user has tried: restarting, reconnecting, different servers, different clients - that's enough troubleshooting
+- Offer to create ticket immediately
+
+Example good response when user has tried everything:
+"I can see you've already tried the standard troubleshooting steps without success. Let me create a support ticket for our IT team to investigate this further. Just say 'create a ticket' to confirm."
+
+Example bad response (don't do this):
+"Let me ask a few more questions..." (when they've already provided details)"""
+
+            # Build messages for Claude
+            messages = []
+            for msg in history[-10:]:  # Keep last 10 messages for context
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+            
+            # Call Claude
+            response = anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                system=system_prompt,
+                messages=messages
+            )
+            
+            response_text = response.content[0].text
+            logger.info("chat_response_generated", conversation_id=conversation_id)
         
-        # For now, return a helpful response
-        # In production, this would use the LLM with retrieved context
-        response = f"I understand you're asking about: {request.message[:100]}..."
+        # Add assistant response to history
+        history.append({"role": "assistant", "content": response_text})
         
-        if context:
-            response += " I found some relevant information that might help."
+        # Keep history manageable
+        if len(history) > 20:
+            conversation_history[conversation_id] = history[-20:]
         
-        return ChatResponse(
-            response=response,
-            conversation_id=conversation_id,
-            suggested_actions=["Create a ticket", "Search knowledge base"]
-        )
+        return {
+            "response": response_text,
+            "conversation_id": conversation_id,
+            "suggested_actions": suggested_actions,
+            "ticket_created": ticket_created
+        }
         
     except Exception as e:
-        logger.error("chat_error", error=str(e))
-        return ChatResponse(
-            response="I'm having trouble processing your request. Please try again.",
-            conversation_id=conversation_id,
-            suggested_actions=["Create a ticket"]
-        )
+        logger.error("chat_error", error=str(e), conversation_id=conversation_id)
+        
+        # Fallback response
+        fallback = generate_fallback_response(request.message)
+        history.append({"role": "assistant", "content": fallback})
+        
+        return {
+            "response": fallback,
+            "conversation_id": conversation_id,
+            "suggested_actions": ["Create a ticket", "Contact IT support"],
+            "ticket_created": None
+        }
+
+
+def generate_fallback_response(message: str) -> str:
+    """Generate a helpful fallback response when Claude is unavailable."""
+    message_lower = message.lower()
+    
+    if any(word in message_lower for word in ["hi", "hello", "hey"]):
+        return "Hello! I'm the IT Support Assistant. How can I help you today? I can assist with password resets, VPN issues, software problems, and more."
+    
+    if any(word in message_lower for word in ["password", "reset", "forgot"]):
+        return "For password issues, please try the self-service password reset portal at password.company.com. If that doesn't work, I can create a ticket for the IT team to assist you. Would you like me to do that?"
+    
+    if any(word in message_lower for word in ["vpn", "connect"]):
+        return "For VPN issues, try these steps: 1) Restart the VPN client, 2) Check your internet connection, 3) Try a different network. If the issue persists, I can create a support ticket for you."
+    
+    if any(word in message_lower for word in ["slow", "performance"]):
+        return "For performance issues, try: 1) Restart your computer, 2) Close unnecessary applications, 3) Check for Windows updates. If problems continue, please create a ticket with details about when the slowness occurs."
+    
+    if any(word in message_lower for word in ["email", "outlook"]):
+        return "For email issues, try: 1) Restart Outlook, 2) Check your internet connection, 3) Clear Outlook cache. If you're still having trouble, I can help create a support ticket."
+    
+    if any(word in message_lower for word in ["install", "software", "application"]):
+        return "For software installations, please check the Company Software Center first. If the software isn't available there, create a ticket specifying the software name and business justification."
+    
+    return "I'd be happy to help with your IT issue. Could you provide more details about what's happening? You can also create a support ticket in the Tickets tab for our IT team to investigate."
 
 
 # ============== Analytics Endpoints ==============
@@ -362,7 +622,6 @@ async def chat_with_assistant(request: ChatMessage):
 @app.get("/api/v1/analytics/dashboard", response_model=AnalyticsDashboard)
 async def get_analytics_dashboard():
     """Get analytics dashboard data."""
-    # Return mock data for demonstration
     return AnalyticsDashboard(
         total_tickets=150,
         resolved_tickets=120,
@@ -383,7 +642,6 @@ async def get_analytics_dashboard():
 @app.get("/api/v1/analytics/trends")
 async def get_analytics_trends(days: int = 7):
     """Get ticket trends over time."""
-    # Return mock trend data
     from datetime import timedelta
     
     trends = []
@@ -433,25 +691,32 @@ async def get_agent_metrics():
 @app.get("/api/v1/knowledge/search")
 async def search_knowledge_base(query: str, limit: int = 5):
     """Search the knowledge base."""
-    results = await knowledge_base.search(query=query, top_k=limit)
-    
-    return {
-        "query": query,
-        "results": [
-            {
-                "content": r.content[:200] + "..." if len(r.content) > 200 else r.content,
-                "relevance": r.relevance_score,
-                "source": r.metadata.get("source", "Unknown")
-            }
-            for r in results
-        ]
-    }
+    try:
+        retriever = ContextRetriever(knowledge_base=knowledge_base)
+        results = await retriever.retrieve(query=query, top_k=limit)
+        
+        return {
+            "query": query,
+            "results": [
+                {
+                    "content": r.get("content", "")[:200] + "..." if len(r.get("content", "")) > 200 else r.get("content", ""),
+                    "source": r.get("metadata", {}).get("source", "Unknown")
+                }
+                for r in results
+            ] if results else []
+        }
+    except Exception as e:
+        logger.error("knowledge_search_error", error=str(e))
+        return {"query": query, "results": []}
 
 
 @app.get("/api/v1/knowledge/stats")
 async def get_knowledge_stats():
     """Get knowledge base statistics."""
-    return knowledge_base.get_stats()
+    try:
+        return knowledge_base.get_stats()
+    except Exception as e:
+        return {"error": str(e), "documents": 0}
 
 
 # ============== Metrics Endpoint ==============
@@ -459,10 +724,13 @@ async def get_knowledge_stats():
 @app.get("/metrics")
 async def get_prometheus_metrics():
     """Prometheus metrics endpoint."""
-    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-    from fastapi.responses import Response
-    
-    return Response(
-        content=generate_latest(),
-        media_type=CONTENT_TYPE_LATEST
-    )
+    try:
+        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+        from fastapi.responses import Response
+        
+        return Response(
+            content=generate_latest(),
+            media_type=CONTENT_TYPE_LATEST
+        )
+    except ImportError:
+        return {"error": "prometheus_client not installed"}
