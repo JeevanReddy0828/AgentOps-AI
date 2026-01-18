@@ -1,84 +1,53 @@
 # 🤖 AgentOps AI - Intelligent IT Operations Platform
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com/)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18+-61DAFB.svg)](https://reactjs.org/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-purple.svg)](https://langchain-ai.github.io/langgraph/)
-[![Anthropic Claude](https://img.shields.io/badge/Anthropic-Claude_Sonnet_4-orange.svg)](https://www.anthropic.com/)
+[![Claude](https://img.shields.io/badge/Claude-Sonnet_4-orange.svg)](https://www.anthropic.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-An enterprise-grade **Agentic AI platform** for autonomous IT operations, featuring multi-agent orchestration, RAG-powered knowledge retrieval, and self-healing automation workflows. Built with Anthropic's Claude API and LangGraph for intelligent ticket resolution and proactive incident management.
+An intelligent IT Operations platform powered by multi-agent orchestration using Claude AI and LangGraph. The system automatically triages, resolves, and manages IT support tickets through specialized AI agents.
 
 ---
 
-## 🎯 Overview
+## 🌟 Features
 
-AgentOps AI leverages cutting-edge agentic frameworks to autonomously resolve IT support tickets, implement self-healing remediation, and provide intelligent self-service capabilities. The platform reduces mean time to resolution (MTTR) by up to **70%** while maintaining enterprise security and compliance standards.
-
-### Key Capabilities
-
-| Feature | Description |
-|---------|-------------|
-| 🤖 **Autonomous Ticket Resolution** | AI agents analyze, categorize, and resolve common IT tickets without human intervention |
-| 🔄 **Multi-Agent Orchestration** | LangGraph state machine coordinates Triage → Compliance → Resolution → Escalation workflows |
-| 📚 **RAG-Powered Knowledge Base** | ChromaDB vector-indexed IT documentation for context-aware troubleshooting |
-| 🔧 **Self-Healing Automation** | Proactive detection and auto-remediation (password reset, account unlock, VPN config) |
-| 🔒 **Security-First Design** | Zero-trust compliance validation with RBAC and audit logging |
-| ⚡ **Rate-Limited API Integration** | Token bucket rate limiting with exponential backoff for Anthropic Claude API |
-| 📊 **Real-time Analytics** | Prometheus metrics + Grafana dashboards for monitoring automation effectiveness |
+- **Multi-Agent Architecture**: Specialized AI agents for triage, resolution, and compliance
+- **Intelligent Chat Assistant**: Natural language IT support powered by Claude with automatic ticket creation
+- **Automatic Ticket Creation**: Create tickets through conversation - just say "create a ticket"
+- **RAG-Enhanced Knowledge Base**: Context-aware responses using ChromaDB
+- **Real-time Dashboard**: Monitor tickets, agent performance, and analytics
+- **Automated Remediation**: Execute common fixes (password resets, VPN configs, account unlocks)
+- **Ticket Management**: View, track, and manage support tickets with detailed status
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           AgentOps AI Platform                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
-│   │   Chatbot    │  │  Self-Service│  │   Slack/     │  │   ServiceNow │    │
-│   │   Portal     │  │    Portal    │  │   Teams Bot  │  │   Integration│    │
-│   └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
-│          └─────────────────┴────────┬────────┴─────────────────┘            │
-│                                     │                                       │
-│   ┌─────────────────────────────────▼─────────────────────────────────────┐ │
-│   │                     FastAPI Gateway (Async)                           │ │
-│   │            Authentication │ Rate Limiting │ Request Routing           │ │
-│   └─────────────────────────────────┬─────────────────────────────────────┘ │
-│                                     │                                       │
-│   ┌─────────────────────────────────▼─────────────────────────────────────┐ │
-│   │                  Agent Orchestrator (LangGraph)                       │ │
-│   │                                                                       │ │
-│   │    ┌─────────┐    ┌────────────┐     ┌───────────┐     ┌──────────┐   │ │
-│   │    │ TRIAGE  │───▶│ COMPLIANCE │───▶│RESOLUTION │───▶│ESCALATION│   │ │
-│   │    │  Agent  │    │   Agent    │     │   Agent   │     │  Agent   │   │ │
-│   │    └─────────┘    └────────────┘     └───────────┘     └──────────┘   │ │
-│   │         │                                  │                          │ │
-│   │         ▼                                  ▼                          │ │
-│   │    ┌─────────┐                      ┌───────────┐                     │ │
-│   │    │Claude AI│                      │   Tools   │                     │ │
-│   │    │ (Sonnet)│                      │  Registry │                     │ │
-│   │    └─────────┘                      └───────────┘                     │ │
-│   └───────────────────────────────────────────────────────────────────────┘ │
-│                                     │                                       │
-│   ┌─────────────────┬───────────────┴───────────────┬───────────────────┐   │
-│   │                 │                               │                   │   │
-│   │  ┌──────────────▼──────────────┐  ┌─────────────▼─────────────┐     │   │
-│   │  │   RAG Knowledge Base        │  │    Remediation Engine     │     │   │
-│   │  │   (ChromaDB + Embeddings)   │  │                           │     │   │
-│   │  │                             │  │  • Password Reset (AD)    │     │   │
-│   │  │   • IT Runbooks             │  │  • Account Unlock         │     │   │
-│   │  │   • Troubleshooting Guides  │  │  • VPN Config Push        │     │   │
-│   │  │   • Historical Tickets      │  │  • Software Install       │     │   │
-│   │  │   • Compliance Policies     │  │  • Network Diagnostics    │     │   │
-│   │  └─────────────────────────────┘  └───────────────────────────┘     │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│   ┌──────────────────────────────────────────────────────────────────────┐  │
-│   │                    Observability & Security Layer                    │  │
-│   │   Prometheus Metrics │ Structured Logging │ Audit Trail │ RBAC       │  │
-│   └──────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        React Frontend                           │
+│         (Dashboard | Tickets | AI Chat Assistant)               │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │ REST API
+┌─────────────────────────▼───────────────────────────────────────┐
+│                      FastAPI Backend                            │
+│                    (src/api/main.py)                            │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────────┐
+│                  LangGraph Orchestrator                         │
+│              (Multi-Agent State Machine)                        │
+├─────────────┬─────────────┬─────────────┬───────────────────────┤
+│   Triage    │  Resolution │  Compliance │    Escalation         │
+│   Agent     │    Agent    │    Agent    │      Agent            │
+└─────────────┴─────────────┴─────────────┴───────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────────┐
+│                    Knowledge Base (RAG)                         │
+│                       ChromaDB                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -87,315 +56,261 @@ AgentOps AI leverages cutting-edge agentic frameworks to autonomously resolve IT
 
 ### Prerequisites
 
-- Python 3.12+
-- Docker & Docker Compose (optional)
-- Anthropic API key ([Get one here](https://console.anthropic.com/))
+- Python 3.11+
+- Node.js 18+
+- Anthropic API Key ([Get one here](https://console.anthropic.com/))
 
-### Installation
+### 1. Clone the Repository
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/agentops-ai.git
-cd agentops-ai
+git clone https://github.com/yourusername/agentic-it-ops.git
+cd agentic-it-ops
+```
 
+### 2. Backend Setup
+
+```bash
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# Activate (Windows PowerShell)
+.\venv\Scripts\Activate
+
+# Activate (Mac/Linux)
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Configure environment
-cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
-
-# Run the application
-uvicorn src.api.main:app --reload --port 8000
+# Install project in development mode
+pip install -e .
 ```
 
-### Running with Docker
+### 3. Frontend Setup
 
 ```bash
-# Set your API key
-echo "ANTHROPIC_API_KEY=sk-ant-your-key-here" > .env
-
-# Start all services
-docker-compose up --build
-
-# Or run in background
-docker-compose up -d --build
+cd frontend
+npm install
 ```
 
-### Verify Installation
+### 4. Environment Variables
 
+Create a `.env` file in the project root:
+
+```env
+ANTHROPIC_API_KEY=your-api-key-here
+```
+
+Or set it directly:
+
+**Windows PowerShell:**
+```powershell
+$env:ANTHROPIC_API_KEY = "your-api-key-here"
+```
+
+**Mac/Linux:**
 ```bash
-# Health check
-curl http://localhost:8000/health
-
-# API docs
-open http://localhost:8000/docs
+export ANTHROPIC_API_KEY="your-api-key-here"
 ```
+
+### 5. Run the Application
+
+**Terminal 1 - Backend:**
+```bash
+uvicorn src.api.main:app --port 8000
+```
+
+**Terminal 2 - Frontend:**
+```bash
+cd frontend
+npm run dev
+```
+
+### 6. Access the Application
+
+| Service | URL |
+|---------|-----|
+| 🖥️ Frontend Dashboard | http://localhost:5173 |
+| 📚 API Documentation | http://localhost:8000/docs |
+| ❤️ Health Check | http://localhost:8000/health |
 
 ---
 
 ## 📁 Project Structure
 
 ```
-agentops-ai/
+agentic-it-ops/
 ├── src/
-│   ├── agents/                    # AI Agent implementations
-│   │   ├── base_agent.py          # Abstract base with Claude integration
-│   │   ├── triage_agent.py        # Ticket classification & routing
-│   │   ├── resolution_agent.py    # Autonomous problem solving
-│   │   ├── compliance_agent.py    # Security & policy validation
-│   │   └── escalation_agent.py    # Human handoff management
+│   ├── agents/                 # AI Agent implementations
+│   │   ├── base_agent.py       # Abstract base with Claude integration
+│   │   ├── triage_agent.py     # Ticket classification & routing
+│   │   ├── resolution_agent.py # Autonomous problem solving
+│   │   ├── compliance_agent.py # Security & policy validation
+│   │   └── escalation_agent.py # Human handoff management
 │   │
-│   ├── workflows/                 # LangGraph workflow definitions
-│   │   └── orchestrator.py        # Multi-agent state machine
+│   ├── workflows/              # LangGraph workflow definitions
+│   │   └── orchestrator.py     # Multi-agent state machine
 │   │
-│   ├── tools/                     # Agent tools & integrations
-│   │   └── remediation.py         # AD, VPN, software deployment tools
+│   ├── tools/                  # Agent tools & integrations
+│   │   └── remediation.py      # AD, VPN, software deployment tools
 │   │
-│   ├── rag/                       # RAG pipeline components
-│   │   ├── knowledge_base.py      # ChromaDB indexing & management
-│   │   └── retriever.py           # Context retrieval with reranking
+│   ├── rag/                    # RAG pipeline components
+│   │   ├── knowledge_base.py   # ChromaDB indexing & management
+│   │   └── retriever.py        # Context retrieval with reranking
 │   │
-│   ├── api/                       # FastAPI application
-│   │   ├── main.py                # Application entry point
-│   │   └── middleware/            # Auth, rate limiting, security
+│   ├── api/                    # FastAPI application
+│   │   └── main.py             # Application entry point
 │   │
-│   ├── models/                    # Pydantic data models
-│   │   ├── ticket.py              # Ticket schemas
-│   │   └── agent_state.py         # Agent state models
+│   ├── models/                 # Pydantic data models
+│   │   ├── ticket.py           # Ticket schemas
+│   │   └── agent_state.py      # Agent state models
 │   │
-│   └── utils/                     # Utilities
-│       ├── rate_limiter.py        # Token bucket rate limiter
-│       ├── security.py            # Security helpers
-│       └── observability.py       # Tracing & metrics
+│   └── utils/                  # Utilities
+│       ├── rate_limiter.py     # Token bucket rate limiter
+│       ├── security.py         # Security helpers
+│       └── observability.py    # Tracing & metrics
 │
-├── frontend/                      # React dashboard (optional)
-├── tests/                         # Test suite
-├── config/                        # Configuration files
-├── docker-compose.yml             # Container orchestration
-├── Dockerfile                     # Container definition
-├── requirements.txt               # Python dependencies
+├── frontend/                   # React dashboard
+│   ├── src/
+│   │   └── App.jsx             # Main application component
+│   └── package.json
+│
+├── tests/                      # Test suite
+├── config/                     # Configuration files
+├── requirements.txt            # Python dependencies
 └── README.md
 ```
 
 ---
 
-## 🤖 Multi-Agent System
+## 🎯 Usage
 
-### Agent Workflow
+### 💬 AI Chat Assistant
+
+The AI Chat Assistant provides natural language IT support with automatic ticket creation.
+
+**How to Use:**
+
+1. Navigate to the **AI Assistant** tab
+2. Describe your IT issue in natural language
+3. The assistant will troubleshoot or offer to create a ticket
+4. Say **"create a ticket"** to generate a support ticket automatically
+
+**Features:**
+- Conversational troubleshooting with context awareness
+- Smart categorization (auto-detects issue type and priority)
+- Quick action buttons for common requests
+- Seamless ticket creation from chat
+
+**Example Conversation:**
 
 ```
-┌─────────┐      ┌────────────┐     ┌────────────┐     ┌──────────┐
-│  NEW    │────▶ │  TRIAGE   │────▶│ COMPLIANCE │────▶│RESOLUTION│
-│ TICKET  │      │   AGENT    │     │   AGENT    │     │  AGENT   │
-└─────────┘      └────────────┘     └────────────┘     └──────────┘
-                     │                   │                  │
-                     │ Classify &        │ Validate         │ Execute
-                     │ Prioritize        │ Actions          │ Tools
-                     │                   │                  │
-                     ▼                   ▼                  ▼
-               ┌──────────┐       ┌──────────┐       ┌──────────┐
-               │ Category │       │ Approved │       │ SUCCESS  │──▶ RESOLVED
-               │ Priority │       │ Denied   │──▶ ESCALATE     │
-               │ Decision │       └──────────┘       │ FAILED   │──▶ ESCALATE
-               └──────────┘                          └──────────┘
+User: VPN won't connect, tried restarting and different servers, need help ASAP
+Assistant: I can see you have tried the standard troubleshooting steps.
+          Let me create a support ticket for our IT team.
+          Just say "create a ticket" to confirm.
+
+User: create a ticket
+
+Assistant: I have created ticket **INC8A2B3C4D** for you!
+           - Issue: Network/VPN Connectivity Issue
+           - Category: Network
+           - Priority: High
+           Our IT team will review it shortly.
 ```
 
-### 1. Triage Agent
-Analyzes incoming tickets and determines optimal resolution path.
+### 🎫 Manual Ticket Creation
+
+1. Go to the **Tickets** tab
+2. Click **New Ticket**
+3. Fill in title, description, category, and priority
+4. Click **Create Ticket**
+
+### 📊 Dashboard
+
+View real-time metrics:
+- Total tickets and resolution rates
+- Auto-resolved vs escalated tickets
+- Average resolution time
+- Agent performance metrics
+- Tickets by category breakdown
+
+### 🔍 Ticket Details
+
+Click on any ticket to view:
+- Full ticket information
+- Resolution status and progress
+- Actions taken by AI agents
+- Escalation details (if applicable)
+
+---
+
+## 🔌 API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/chat` | POST | Chat with AI assistant |
+| `/api/v1/tickets` | POST | Create a new ticket |
+| `/api/v1/tickets/{id}` | GET | Get ticket details |
+| `/api/v1/tickets/{id}/status` | GET | Get resolution status |
+| `/api/v1/analytics/dashboard` | GET | Get dashboard metrics |
+| `/health` | GET | Health check |
+| `/ready` | GET | Readiness check |
+
+---
+
+## 🤖 Agent Capabilities
+
+### Triage Agent
+- Classifies tickets by category (network, hardware, software, access, email)
+- Assigns priority based on urgency keywords
+- Routes to appropriate resolution path
+
+### Resolution Agent
+- Executes automated remediation actions
+- Password resets and account unlocks
+- VPN configuration pushes
+- Software installation/repair
+- Network adapter resets
+
+### Compliance Agent
+- Validates actions against security policies
+- Ensures audit trail compliance
+- Checks for sensitive data handling
+
+### Escalation Agent
+- Handles complex issues requiring human intervention
+- Manages handoff to IT staff
+- Tracks escalation reasons
+
+---
+
+## 🛠️ Configuration
+
+### Rate Limiting
+
+Agents have built-in rate limiting to prevent API abuse:
 
 ```python
-from src.agents import TriageAgent
+# Default limits
+Triage Agent: 50 RPM, 100k TPM
+Resolution Agent: 40 RPM, 80k TPM
+Compliance Agent: 60 RPM, 50k TPM
+```
 
-agent = TriageAgent()
-result = await agent.analyze(
-    ticket_id="INC001234",
-    title="Cannot access VPN",
-    description="Getting timeout errors when connecting to corporate VPN"
+### Knowledge Base
+
+Add documents to the knowledge base for RAG:
+
+```python
+from src.rag.knowledge_base import KnowledgeBase
+
+kb = KnowledgeBase()
+kb.add_document(
+    content=\"VPN troubleshooting steps...\",
+    metadata={\"source\": \"IT Runbook\", \"category\": \"network\"}
 )
-
-# Returns: TriageResult(
-#   category=TicketCategory.NETWORK,
-#   priority=TicketPriority.MEDIUM,
-#   decision=TriageDecision.AGENT_RESOLUTION,
-#   confidence=0.87,
-#   suggested_resolution_path="Check VPN config, push new profile"
-# )
 ```
-
-### 2. Compliance Agent
-Validates all actions against security policies before execution.
-
-```python
-from src.agents import ComplianceAgent
-
-agent = ComplianceAgent()
-is_approved = await agent.validate_action(
-    action_type="reset_password",
-    parameters={"user_email": "john@company.com"},
-    context=agent_context
-)
-
-# Blocks: delete_user_account, grant_admin_access, disable_mfa
-# Requires: identity_verification for password resets
-```
-
-### 3. Resolution Agent
-Executes autonomous troubleshooting with tool calling.
-
-```python
-from src.agents import ResolutionAgent
-
-agent = ResolutionAgent()
-result = await agent.resolve(
-    ticket_id="INC001234",
-    title="Account locked out",
-    description="Cannot login, account locked",
-    category=TicketCategory.ACCESS
-)
-
-# Automatically:
-# 1. Checks account status in AD
-# 2. Unlocks account
-# 3. Sends notification to user
-# 4. Updates ticket to RESOLVED
-```
-
----
-
-## 🔧 Available Tools
-
-| Tool | Description | Compliance |
-|------|-------------|------------|
-| `reset_password` | Reset user password in AD/Entra | Identity verification required |
-| `unlock_account` | Unlock locked user accounts | ✅ Auto-approved |
-| `enable_mfa` | Enable/reset MFA | ✅ Auto-approved |
-| `push_vpn_config` | Deploy VPN configuration via Intune | ✅ Auto-approved |
-| `install_software` | Trigger software deployment | Authorized software only |
-| `run_diagnostic` | Execute remote diagnostics | ✅ Auto-approved |
-| `reset_network_adapter` | Reset network adapter remotely | ✅ Auto-approved |
-
----
-
-## ⚡ Rate Limiting
-
-Built-in token bucket rate limiter for Anthropic API:
-
-```python
-from src.utils.rate_limiter import RateLimiter
-
-limiter = RateLimiter(
-    requests_per_minute=50,      # RPM limit
-    tokens_per_minute=100000     # TPM limit
-)
-
-# Automatically:
-# - Tracks sliding window usage
-# - Blocks when limits reached
-# - Implements exponential backoff on 429s
-# - Records token usage per request
-```
-
-### Rate Limit Configuration
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `requests_per_minute` | 50 | Max API calls per minute |
-| `tokens_per_minute` | 100,000 | Max tokens per minute |
-| `max_wait_seconds` | 60 | Max wait time before failing |
-| `max_retries` | 3 | Retry attempts on rate limit |
-
----
-
-## 📊 API Endpoints
-
-### Tickets
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/tickets` | Create new ticket |
-| `GET` | `/api/v1/tickets/{id}` | Get ticket details |
-| `POST` | `/api/v1/tickets/{id}/resolve` | Trigger autonomous resolution |
-| `GET` | `/api/v1/tickets/{id}/status` | Get resolution status |
-
-### Chat
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/chat` | Send message to AI assistant |
-| `GET` | `/api/v1/chat/history/{id}` | Get conversation history |
-
-### Analytics
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/analytics/dashboard` | Dashboard metrics |
-| `GET` | `/api/v1/analytics/agents` | Agent performance stats |
-
-### Example Request
-
-```bash
-# Create a ticket
-curl -X POST http://localhost:8000/api/v1/tickets \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Cannot connect to VPN",
-    "description": "Getting timeout errors from home office",
-    "user_email": "john.doe@company.com"
-  }'
-
-# Response
-{
-  "ticket_id": "INC00001234",
-  "status": "new",
-  "category": null,
-  "priority": null,
-  "created_at": "2024-01-16T12:00:00Z"
-}
-```
-
----
-
-## 🔒 Security Features
-
-- **Zero-Trust Architecture**: Every action validated against security policies
-- **Role-Based Access Control**: Granular permissions for agent capabilities
-- **Compliance Validation**: Pre-execution checks block dangerous actions
-- **Audit Logging**: Complete trail for all automated actions
-- **Sensitive Data Detection**: Automatic blocking of SSN, credit cards, etc.
-- **Rate Limiting**: Prevents API abuse and runaway costs
-
-### Blocked Actions (Require Human Approval)
-
-```python
-APPROVAL_REQUIRED_ACTIONS = [
-    "delete_user_account",
-    "grant_admin_access",
-    "modify_security_group",
-    "export_user_data",
-    "disable_mfa",
-    "access_privileged_system"
-]
-```
-
----
-
-## 📈 Observability
-
-### Metrics (Prometheus)
-
-- `agent_requests_total` - Total requests by agent
-- `agent_latency_seconds` - Execution time histogram
-- `tool_executions_total` - Tool usage by success/failure
-- `active_workflows` - Currently running workflows
-
-### Dashboards
-
-Access Grafana at `http://localhost:3000` (admin/admin)
 
 ---
 
@@ -406,57 +321,45 @@ Access Grafana at `http://localhost:3000` (admin/admin)
 pytest
 
 # Run with coverage
-pytest --cov=src --cov-report=html
+pytest --cov=src
 
 # Run specific test file
-pytest tests/test_agents.py -v
+pytest tests/test_agents.py
 ```
 
 ---
 
-## 🚢 Deployment
+## 🐳 Docker (Optional)
 
-### Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | ✅ | Anthropic API key |
-| `CHROMA_HOST` | ❌ | ChromaDB host (default: localhost) |
-| `REDIS_URL` | ❌ | Redis URL for caching |
-| `RATE_LIMIT_REQUESTS_PER_MINUTE` | ❌ | RPM limit (default: 50) |
-| `RATE_LIMIT_TOKENS_PER_MINUTE` | ❌ | TPM limit (default: 100000) |
-| `LOG_LEVEL` | ❌ | Logging level (default: INFO) |
-
-### Docker Compose Services
-
-| Service | Port | Description |
-|---------|------|-------------|
-| `api` | 8000 | FastAPI application |
-| `redis` | 6379 | Session & cache storage |
-| `chromadb` | 8001 | Vector database |
-| `prometheus` | 9090 | Metrics collection |
-| `grafana` | 3000 | Dashboards |
+```bash
+# Build and run with Docker Compose
+docker-compose up --build
+```
 
 ---
 
-## 🛣️ Roadmap
+## 📊 Monitoring
 
-- [ ] Human-in-the-loop approval workflow UI
-- [ ] Real ServiceNow/Jira API integration
-- [ ] Microsoft Graph API for live AD operations
-- [ ] Feedback learning loop for agent improvement
-- [ ] Slack/Teams bot interface
-- [ ] Multi-tenant support
+The application exposes Prometheus metrics at `/metrics`:
+
+- `tickets_created_total`
+- `tickets_resolved_total`
+- `agent_request_duration_seconds`
+- `agent_errors_total`
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details.
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m \"Add amazing feature\"`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ---
 
-## 📄 License
+## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
@@ -464,9 +367,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- [Anthropic](https://www.anthropic.com/) for Claude API
-- [LangGraph](https://langchain-ai.github.io/langgraph/) for agent orchestration
-- [ChromaDB](https://www.trychroma.com/) for vector storage
-- [FastAPI](https://fastapi.tiangolo.com/) for the API framework
+- [Anthropic](https://anthropic.com) - Claude API
+- [LangGraph](https://github.com/langchain-ai/langgraph) - Agent orchestration
+- [FastAPI](https://fastapi.tiangolo.com) - Backend framework
+- [ChromaDB](https://www.trychroma.com) - Vector database
+- [React](https://reactjs.org) - Frontend framework
 
 ---
