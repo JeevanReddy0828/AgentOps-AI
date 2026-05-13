@@ -28,7 +28,7 @@ const AgentOpsDashboard = () => {
   const [chatInput, setChatInput] = useState('');
   const [conversationId, setConversationId] = useState(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
-  const [suggestedActions, setSuggestedActions] = useState(['Create a ticket', 'Check VPN status', 'Reset password']);
+  const [suggestedActions, setSuggestedActions] = useState(['VPN not connecting', 'Locked out of account', 'Software install help']);
   const chatEndRef = useRef(null);
 
   // Tickets state
@@ -42,9 +42,15 @@ const AgentOpsDashboard = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  // Fetch dashboard data
+  // Fetch dashboard data and tickets on mount, refresh every 10s
   useEffect(() => {
     fetchDashboardData();
+    fetchTickets();
+    const interval = setInterval(() => {
+      fetchDashboardData();
+      fetchTickets();
+    }, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const fetchDashboardData = async () => {
@@ -134,16 +140,18 @@ const AgentOpsDashboard = () => {
       { role: 'assistant', content: "Hello! I'm your IT Support Assistant. How can I help you today?" }
     ]);
     setConversationId(null);
-    setSuggestedActions(['Create a ticket', 'Check VPN status', 'Reset password']);
+    setSuggestedActions(['VPN not connecting', 'Locked out of account', 'Software install help']);
   };
 
   // Ticket functions
   const fetchTickets = async () => {
     setIsLoadingTickets(true);
     try {
-      // In a real app, you'd have a /tickets endpoint that lists all tickets
-      // For now, we'll just refresh the dashboard
-      await fetchDashboardData();
+      const response = await fetch(`${API_BASE}/api/v1/tickets`);
+      if (response.ok) {
+        const data = await response.json();
+        setTickets(data.tickets || []);
+      }
     } catch (error) {
       console.error('Failed to fetch tickets:', error);
     } finally {
@@ -354,22 +362,28 @@ const AgentOpsDashboard = () => {
             <button className="text-sm text-blue-600 hover:text-blue-700 font-medium" onClick={() => setActiveTab('tickets')}>View All</button>
           </div>
           <div className="space-y-3">
-            {recentTickets.map((ticket, index) => (
-              <div key={index} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-xl transition-colors">
+            {(tickets.length > 0 ? tickets.slice(0, 5) : recentTickets).map((ticket, index) => (
+              <div key={ticket.ticket_id || ticket.id || index} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-xl transition-colors">
                 <div className="flex items-center space-x-3">
                   <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
                     <MessageSquare className="w-5 h-5 text-gray-500" />
                   </div>
                   <div>
                     <p className="font-medium text-gray-900 text-sm">{ticket.title}</p>
-                    <p className="text-xs text-gray-500">{ticket.id} • {ticket.agent}</p>
+                    <p className="text-xs text-gray-500">
+                      {ticket.ticket_id || ticket.id}
+                      {ticket.category && ` • ${ticket.category}`}
+                      {ticket.agent && ` • ${ticket.agent}`}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center space-x-3">
                   <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(ticket.status)}`}>
-                    {ticket.status.replace('_', ' ')}
+                    {ticket.status?.replace('_', ' ')}
                   </span>
-                  <span className="text-xs text-gray-400">{ticket.time}</span>
+                  <span className="text-xs text-gray-400">
+                    {ticket.created_at ? new Date(ticket.created_at).toLocaleTimeString() : ticket.time}
+                  </span>
                 </div>
               </div>
             ))}
@@ -601,8 +615,14 @@ const AgentOpsDashboard = () => {
           </div>
         </div>
         <div className="divide-y divide-gray-100">
-          {[...tickets, ...recentTickets].map((ticket, index) => (
-            <div key={index} className="p-4 hover:bg-gray-50 transition-colors">
+          {tickets.length === 0 && !isLoadingTickets && (
+            <div className="p-8 text-center text-gray-400 text-sm">No tickets yet. Create one from the Chat tab or using New Ticket.</div>
+          )}
+          {isLoadingTickets && tickets.length === 0 && (
+            <div className="p-8 text-center text-gray-400 text-sm">Loading...</div>
+          )}
+          {tickets.map((ticket, index) => (
+            <div key={ticket.ticket_id || index} className="p-4 hover:bg-gray-50 transition-colors">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-4">
                   <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center">
@@ -610,16 +630,23 @@ const AgentOpsDashboard = () => {
                   </div>
                   <div>
                     <div className="flex items-center space-x-2">
-                      <span className="font-mono text-sm text-blue-600">{ticket.ticket_id || ticket.id}</span>
+                      <span className="font-mono text-sm text-blue-600">{ticket.ticket_id}</span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(ticket.status)}`}>
                         {ticket.status?.replace('_', ' ')}
                       </span>
+                      {ticket.escalated && (
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">escalated</span>
+                      )}
                     </div>
                     <p className="font-medium text-gray-900 mt-1">{ticket.title}</p>
                     <p className="text-sm text-gray-500 mt-0.5">
                       {ticket.category && <span className="capitalize">{ticket.category} • </span>}
-                      {ticket.agent || ticket.created_at || ticket.time}
+                      {ticket.priority && <span className="capitalize">{ticket.priority} priority • </span>}
+                      {ticket.created_at ? new Date(ticket.created_at).toLocaleString() : ''}
                     </p>
+                    {ticket.resolution_summary && (
+                      <p className="text-xs text-emerald-600 mt-1">{ticket.resolution_summary}</p>
+                    )}
                   </div>
                 </div>
                 <button className="px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">

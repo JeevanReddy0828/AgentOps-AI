@@ -21,6 +21,7 @@ from src.agents.resolution_agent import ResolutionAgent, ResolutionResult
 from src.agents.compliance_agent import ComplianceAgent
 from src.models.ticket import Ticket, TicketStatus, TicketCategory, TicketPriority
 from src.models.agent_state import AgentState
+from src.rag.retriever import ContextRetriever
 
 
 logger = structlog.get_logger(__name__)
@@ -109,9 +110,14 @@ class AgentOrchestrator:
         compliance_agent: Optional[ComplianceAgent] = None,
         max_iterations: int = 5
     ):
-        self.triage_agent = triage_agent or TriageAgent()
-        self.resolution_agent = resolution_agent or ResolutionAgent()
+        # Share one ComplianceAgent and one ContextRetriever across all agents
         self.compliance_agent = compliance_agent or ComplianceAgent()
+        shared_retriever = ContextRetriever()
+        self.triage_agent = triage_agent or TriageAgent(retriever=shared_retriever)
+        self.resolution_agent = resolution_agent or ResolutionAgent(
+            retriever=shared_retriever,
+            compliance_agent=self.compliance_agent
+        )
         self.max_iterations = max_iterations
         
         # In-memory ticket storage
@@ -177,6 +183,58 @@ class AgentOrchestrator:
         
         return workflow
     
+    def get_analytics(self) -> Dict[str, Any]:
+        """Compute analytics from real ticket and workflow data."""
+        tickets = list(self._tickets.values())
+        results = list(self._workflow_results.values())
+
+        total = len(tickets)
+        resolved = sum(1 for r in results if r.status == WorkflowStatus.COMPLETED)
+        escalated = sum(1 for r in results if r.escalated)
+        # Auto-resolved: completed quickly without escalation
+        auto_resolved = sum(
+            1 for r in results
+            if r.status == WorkflowStatus.COMPLETED and not r.escalated and r.total_duration_seconds < 30
+        )
+
+        completed = [r for r in results if r.status == WorkflowStatus.COMPLETED]
+        avg_minutes = (
+            sum(r.total_duration_seconds for r in completed) / len(completed) / 60
+            if completed else 0.0
+        )
+
+        categories: Dict[str, int] = {}
+        for t in tickets:
+            cat = t.get("category") or "other"
+            categories[cat] = categories.get(cat, 0) + 1
+
+        return {
+            "total_tickets": total,
+            "resolved_tickets": resolved,
+            "auto_resolved": auto_resolved,
+            "escalated": escalated,
+            "avg_resolution_time_minutes": round(avg_minutes, 2),
+            "resolution_rate": round(resolved / total, 2) if total > 0 else 0.0,
+            "top_categories": dict(
+                sorted(categories.items(), key=lambda x: x[1], reverse=True)[:5]
+            )
+        }
+
+    def list_tickets(self) -> List[Dict[str, Any]]:
+        """Return all tickets with their current status."""
+        result = []
+        for ticket_id, ticket in self._tickets.items():
+            entry = dict(ticket)
+            entry["ticket_id"] = ticket_id
+            if ticket_id in self._workflow_results:
+                wr = self._workflow_results[ticket_id]
+                entry["status"] = wr.status.value
+                entry["resolution_summary"] = wr.resolution_summary
+                entry["escalated"] = wr.escalated
+            result.append(entry)
+        result.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return result
+
     def store_ticket(self, ticket_id: str, ticket_data: Dict[str, Any]) -> None:
         """Store ticket data for later retrieval."""
         self._tickets[ticket_id] = {

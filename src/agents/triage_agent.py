@@ -105,7 +105,7 @@ class TriageAgent(BaseAgent):
         super().__init__(AgentConfig(
             name="triage_agent",
             description="Intelligent ticket classification and routing",
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             temperature=0.1,
             capabilities=[
                 AgentCapability.READ_TICKET,
@@ -244,8 +244,12 @@ REASONING: [Your analysis]"""
             retrieved_knowledge=knowledge_results
         )
         
-        llm_analysis = await self.think(analysis_prompt, context)
-        
+        try:
+            llm_analysis = await self.think(analysis_prompt, context)
+        except Exception as e:
+            logger.warning("triage_llm_failed_using_rule_based", ticket_id=ticket_id, error=str(e))
+            llm_analysis = ""
+
         # Step 5: Parse response and build result
         final_result = self._parse_analysis(
             ticket_id=ticket_id,

@@ -8,36 +8,51 @@ from typing import Any, Callable, Dict, Optional
 from functools import wraps
 from datetime import datetime
 import structlog
-from prometheus_client import Counter, Histogram, Gauge
 
 
 logger = structlog.get_logger(__name__)
 
 
-# Prometheus Metrics
-AGENT_REQUESTS = Counter(
-    "agent_requests_total",
-    "Total agent requests",
-    ["agent_name", "action"]
-)
+# Prometheus Metrics — guarded so the app starts even without prometheus_client
+try:
+    from prometheus_client import Counter, Histogram, Gauge
 
-AGENT_LATENCY = Histogram(
-    "agent_latency_seconds",
-    "Agent execution latency",
-    ["agent_name"],
-    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
-)
+    AGENT_REQUESTS = Counter(
+        "agent_requests_total",
+        "Total agent requests",
+        ["agent_name", "action"]
+    )
+    AGENT_LATENCY = Histogram(
+        "agent_latency_seconds",
+        "Agent execution latency",
+        ["agent_name"],
+        buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+    )
+    ACTIVE_WORKFLOWS = Gauge(
+        "active_workflows",
+        "Number of active workflows"
+    )
+    TOOL_EXECUTIONS = Counter(
+        "tool_executions_total",
+        "Total tool executions",
+        ["tool_name", "success"]
+    )
+    _PROMETHEUS_AVAILABLE = True
 
-ACTIVE_WORKFLOWS = Gauge(
-    "active_workflows",
-    "Number of active workflows"
-)
+except ImportError:
+    logger.warning("prometheus_client_not_installed_metrics_disabled")
+    _PROMETHEUS_AVAILABLE = False
 
-TOOL_EXECUTIONS = Counter(
-    "tool_executions_total",
-    "Total tool executions",
-    ["tool_name", "success"]
-)
+    class _NoOp:
+        def labels(self, **kwargs): return self
+        def inc(self): pass
+        def observe(self, v): pass
+        def set(self, v): pass
+
+    AGENT_REQUESTS = _NoOp()
+    AGENT_LATENCY = _NoOp()
+    ACTIVE_WORKFLOWS = _NoOp()
+    TOOL_EXECUTIONS = _NoOp()
 
 
 def setup_tracing(service_name: str = "agentops-ai"):

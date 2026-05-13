@@ -31,7 +31,7 @@ class RemediationEngine:
         
         return {
             "success": True,
-            "temporary_password": "TempPass123!" if temporary else None,
+            "temporary_password_set": temporary,
             "must_change_on_login": temporary,
             "message": "Password reset successful"
         }

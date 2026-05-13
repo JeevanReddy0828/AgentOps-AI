@@ -5,7 +5,7 @@ Autonomous IT support resolution agent using Claude for troubleshooting
 and remediation actions.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from enum import Enum
 import json
@@ -77,12 +77,13 @@ class ResolutionAgent(BaseAgent):
     def __init__(
         self,
         retriever: Optional[ContextRetriever] = None,
-        remediation_engine: Optional[RemediationEngine] = None
+        remediation_engine: Optional[RemediationEngine] = None,
+        compliance_agent: Optional[Any] = None
     ):
         super().__init__(AgentConfig(
             name="resolution_agent",
             description="Autonomous ticket resolution with tool execution",
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             temperature=0.2,
             capabilities=[
                 AgentCapability.READ_TICKET,
@@ -97,8 +98,8 @@ class ResolutionAgent(BaseAgent):
             max_retries=3,
             requests_per_minute=40,
             tokens_per_minute=80000
-        ))
-        
+        ), compliance_agent=compliance_agent)
+
         self.retriever = retriever or ContextRetriever()
         self.remediation = remediation_engine or RemediationEngine()
         self._register_tools()
@@ -294,8 +295,9 @@ FOLLOW_UP: Any required follow-up"""
         # Execute resolution plan
         executed_steps = await self._execute_plan(plan, context)
         
-        # Verify resolution
-        success = all(step.success for step in executed_steps if step.success is not None)
+        # Verify resolution — must have at least one step with a definitive result
+        evaluated_steps = [s for s in executed_steps if s.success is not None]
+        success = bool(evaluated_steps) and all(s.success for s in evaluated_steps)
         
         # Generate user communication
         user_message = await self._generate_user_message(
@@ -305,18 +307,22 @@ FOLLOW_UP: Any required follow-up"""
             context=context
         )
         
-        # Send notifications and update ticket
+        # Send notifications and update ticket — routed through execute_tool for audit trail
         if success and user_email:
-            await self._send_user_notification(
-                user_email=user_email,
-                subject=f"Ticket {ticket_id} Resolved",
-                message=user_message
+            await self.execute_tool(
+                "send_user_notification",
+                {"user_email": user_email, "subject": f"Ticket {ticket_id} Resolved", "message": user_message},
+                context
             )
-        
-        await self._update_ticket(
-            ticket_id=ticket_id,
-            status=TicketStatus.RESOLVED if success else TicketStatus.IN_PROGRESS,
-            work_notes=self._format_work_notes(executed_steps)
+
+        await self.execute_tool(
+            "update_ticket",
+            {
+                "ticket_id": ticket_id,
+                "status": TicketStatus.RESOLVED if success else TicketStatus.IN_PROGRESS,
+                "work_notes": self._format_work_notes(executed_steps)
+            },
+            context
         )
         
         execution_time = (datetime.utcnow() - start_time).total_seconds()
@@ -504,14 +510,20 @@ Create a step-by-step plan following the specified output format."""
             step.timestamp = datetime.utcnow()
             
             if step.tool_name and step.tool_name in self.tools:
-                result = await self.execute_tool(
-                    tool_name=step.tool_name,
-                    parameters=step.tool_parameters or {},
-                    context=context
-                )
-                
-                step.success = result.success
-                step.actual_outcome = str(result.output) if result.success else result.error
+                try:
+                    result = await self.execute_tool(
+                        tool_name=step.tool_name,
+                        parameters=step.tool_parameters or {},
+                        context=context
+                    )
+                    step.success = result.success
+                    step.actual_outcome = str(result.output) if result.success else result.error
+                except Exception as e:
+                    logger.error("execute_tool_raised", step=step.step_number, tool=step.tool_name, error=str(e))
+                    step.success = False
+                    step.actual_outcome = str(e)
+                    executed_steps.append(step)
+                    break
                 
                 context.previous_actions.append(AgentAction(
                     action_type=step.tool_name,
@@ -524,8 +536,9 @@ Create a step-by-step plan following the specified output format."""
                 if not result.success:
                     logger.warning("step_failed", step=step.step_number, tool=step.tool_name, error=result.error)
             else:
-                step.success = True
-                step.actual_outcome = "Step noted"
+                step.success = False
+                step.actual_outcome = f"Tool '{step.tool_name}' not registered"
+                logger.warning("tool_not_registered", tool=step.tool_name, ticket_id=plan.ticket_id)
             
             executed_steps.append(step)
             

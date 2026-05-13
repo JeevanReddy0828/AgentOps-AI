@@ -46,53 +46,61 @@ class RetrievalResult(BaseModel):
 class KnowledgeBase:
     """
     ChromaDB-backed knowledge base for IT operations.
-    
+
     Features:
     - Multi-collection support (runbooks, tickets, policies)
     - Automatic chunking for long documents
     - Metadata filtering
     - Incremental updates
     """
-    
+
     COLLECTION_NAMES = {
         "runbook": "it_runbooks",
         "faq": "it_faqs",
         "historical_ticket": "historical_tickets",
         "policy": "it_policies"
     }
-    
+
     def __init__(
         self,
         persist_directory: str = "./data/chroma",
-        embedding_model: str = "all-MiniLM-L6-v2"
+        embedding_model: str = "all-MiniLM-L6-v2",
+        model_cache_dir: str = "./.cache/sentence-transformers",
     ):
         self.persist_directory = persist_directory
+        self.embedding_model = embedding_model
+        self.model_cache_dir = model_cache_dir
         self._collections = {}
-        
+
         # Text splitter for chunking
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
             separators=["\n\n", "\n", ". ", " ", ""]
         )
-        
+
         # Lazy initialization of ChromaDB and embeddings
         self._client = None
         self._embeddings = None
-        
-        logger.info("knowledge_base_initialized", persist_dir=persist_directory)
+
+        logger.info(
+            "knowledge_base_initialized",
+            persist_dir=persist_directory,
+            model_cache=model_cache_dir,
+        )
     
     def _get_client(self):
-        """Lazy load ChromaDB client."""
+        """Lazy load ChromaDB persistent client."""
         if self._client is None:
             try:
                 import chromadb
-                from chromadb.config import Settings
-                
-                self._client = chromadb.Client(Settings(
-                    persist_directory=self.persist_directory,
-                    anonymized_telemetry=False
-                ))
+                from pathlib import Path
+
+                Path(self.persist_directory).mkdir(parents=True, exist_ok=True)
+                self._client = chromadb.PersistentClient(
+                    path=self.persist_directory,
+                    settings=chromadb.Settings(anonymized_telemetry=False),
+                )
                 self._initialize_collections()
             except ImportError:
                 logger.warning("chromadb_not_installed")
@@ -103,11 +111,17 @@ class KnowledgeBase:
         return self._client
     
     def _get_embeddings(self):
-        """Lazy load embeddings model."""
+        """Lazy load embeddings model, storing weights in the project cache dir."""
         if self._embeddings is None:
             try:
+                from pathlib import Path
                 from sentence_transformers import SentenceTransformer
-                self._embeddings = SentenceTransformer('all-MiniLM-L6-v2')
+
+                Path(self.model_cache_dir).mkdir(parents=True, exist_ok=True)
+                self._embeddings = SentenceTransformer(
+                    self.embedding_model,
+                    cache_folder=self.model_cache_dir,
+                )
             except ImportError:
                 logger.warning("sentence_transformers_not_installed")
                 self._embeddings = None
@@ -287,9 +301,11 @@ class KnowledgeBase:
         
         where_filter = None
         if filters:
-            where_filter = {
-                "$and": [{k: v} for k, v in filters.items()]
-            } if len(filters) > 1 else filters
+            if len(filters) > 1:
+                where_filter = {"$and": [{k: {"$eq": v}} for k, v in filters.items()]}
+            else:
+                k, v = next(iter(filters.items()))
+                where_filter = {k: {"$eq": v}}
         
         for collection in collections_to_search:
             if collection is None:

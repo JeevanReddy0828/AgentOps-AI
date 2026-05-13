@@ -59,41 +59,31 @@ class RateLimiter:
         Acquire permission to make an API call.
         Blocks until rate limit allows the request.
         """
-        async with self._lock:
-            while True:
+        while True:
+            wait_time = None
+            async with self._lock:
                 now = datetime.utcnow()
                 window_start = now - timedelta(minutes=1)
-                
-                # Clean old entries
                 self._cleanup_old_entries(window_start)
-                
-                # Check request rate
+
                 current_requests = len(self._request_times)
+                current_tokens = sum(tokens for _, tokens in self._token_usage)
+
                 if current_requests >= self.requests_per_minute:
                     wait_time = self._calculate_wait_time(self._request_times[0], now)
-                    if wait_time > self.max_wait_seconds:
-                        logger.warning("rate_limit_max_wait_exceeded", wait_time=wait_time)
-                        wait_time = self.max_wait_seconds
-                    
+                    wait_time = min(wait_time, self.max_wait_seconds)
                     logger.debug("rate_limit_waiting", wait_time=wait_time, reason="rpm")
-                    await asyncio.sleep(wait_time)
-                    continue
-                
-                # Check token rate
-                current_tokens = sum(tokens for _, tokens in self._token_usage)
-                if current_tokens >= self.tokens_per_minute:
+                elif current_tokens >= self.tokens_per_minute:
                     oldest_token_time = self._token_usage[0][0] if self._token_usage else now
                     wait_time = self._calculate_wait_time(oldest_token_time, now)
-                    if wait_time > self.max_wait_seconds:
-                        wait_time = self.max_wait_seconds
-                    
+                    wait_time = min(wait_time, self.max_wait_seconds)
                     logger.debug("rate_limit_waiting", wait_time=wait_time, reason="tpm")
-                    await asyncio.sleep(wait_time)
-                    continue
-                
-                # Record this request
-                self._request_times.append(now)
-                break
+                else:
+                    self._request_times.append(now)
+                    return
+
+            # Sleep outside the lock so other coroutines can check their own limits
+            await asyncio.sleep(wait_time)
     
     def record_tokens(self, token_count: int) -> None:
         """Record token usage for a completed request."""

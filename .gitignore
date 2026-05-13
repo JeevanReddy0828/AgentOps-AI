@@ -36,8 +36,9 @@ logs/
 htmlcov/
 .pytest_cache/
 
-# Data
+# Data & cache (kept local, not committed)
 data/
+.cache/
 *.db
 *.sqlite3
 chroma/

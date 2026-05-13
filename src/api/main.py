@@ -9,6 +9,11 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 import uuid
 import os
+
+# Load .env before any other imports that read env vars
+from dotenv import load_dotenv
+load_dotenv()
+
 import structlog
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +23,7 @@ from src.workflows.orchestrator import AgentOrchestrator, WorkflowResult, Workfl
 from src.rag.knowledge_base import KnowledgeBase, ContextRetriever
 from src.models.ticket import TicketStatus, TicketCategory, TicketPriority
 from src.utils.observability import setup_tracing, MetricsCollector
+from src.utils.security import sanitize_input
 
 # Import Anthropic
 try:
@@ -48,11 +54,11 @@ async def lifespan(app: FastAPI):
     orchestrator = AgentOrchestrator()
     metrics = MetricsCollector(agent_name="api")
     
-    # Initialize Anthropic client
+    # Initialize Anthropic async client
     if ANTHROPIC_AVAILABLE:
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if api_key:
-            anthropic_client = anthropic.Anthropic(api_key=api_key)
+            anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
             logger.info("anthropic_client_initialized")
         else:
             logger.warning("anthropic_api_key_not_set")
@@ -74,13 +80,18 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS middleware — restrict to known frontend origins
+_ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -174,6 +185,12 @@ async def readiness_check():
 
 # ============== Ticket Endpoints ==============
 
+@app.get("/api/v1/tickets")
+async def list_tickets():
+    """List all tickets."""
+    return {"tickets": orchestrator.list_tickets()}
+
+
 @app.post("/api/v1/tickets", response_model=TicketResponse)
 async def create_ticket(
     request: TicketCreateRequest,
@@ -182,12 +199,16 @@ async def create_ticket(
     """Create a new IT support ticket and start processing."""
     ticket_id = f"INC{uuid.uuid4().hex[:8].upper()}"
     created_at = datetime.utcnow().isoformat()
-    
+
+    # Sanitize user-supplied strings at the API boundary
+    safe_title = sanitize_input(request.title)
+    safe_description = sanitize_input(request.description)
+
     # Store ticket
     ticket_data = {
         "ticket_id": ticket_id,
-        "title": request.title,
-        "description": request.description,
+        "title": safe_title,
+        "description": safe_description,
         "user_email": request.user_email,
         "category": request.category.value if request.category else None,
         "priority": request.priority.value if request.priority else None,
@@ -197,23 +218,23 @@ async def create_ticket(
     
     orchestrator.store_ticket(ticket_id, ticket_data)
     
-    logger.info("ticket_created", ticket_id=ticket_id, title=request.title)
-    
+    logger.info("ticket_created", ticket_id=ticket_id, title=safe_title)
+
     # Start async processing
     background_tasks.add_task(
         process_ticket_async,
         ticket_id=ticket_id,
-        title=request.title,
-        description=request.description,
+        title=safe_title,
+        description=safe_description,
         user_email=request.user_email,
         category=request.category,
         priority=request.priority
     )
-    
+
     return TicketResponse(
         ticket_id=ticket_id,
-        title=request.title,
-        description=request.description,
+        title=safe_title,
+        description=safe_description,
         status="new",
         category=request.category.value if request.category else None,
         priority=request.priority.value if request.priority else None,
@@ -344,6 +365,7 @@ async def trigger_resolution(ticket_id: str, background_tasks: BackgroundTasks):
 
 # Store conversation history in memory (use Redis in production)
 conversation_history: Dict[str, List[Dict[str, str]]] = {}
+_MAX_CONVERSATIONS = 1000  # evict oldest when exceeded
 
 # Store context for ticket creation
 chat_context: Dict[str, Dict[str, Any]] = {}
@@ -351,24 +373,26 @@ chat_context: Dict[str, Dict[str, Any]] = {}
 
 def extract_issue_from_history(history: List[Dict[str, str]]) -> Dict[str, Any]:
     """Extract issue details from conversation history."""
+    import re
     user_messages = [msg["content"] for msg in history if msg["role"] == "user"]
     full_conversation = "\n".join(user_messages)
     full_conversation_lower = full_conversation.lower()
-    
-    # Determine category
-    if any(word in full_conversation_lower for word in ["password", "login", "locked", "access", "authentication"]):
+    words = set(re.findall(r"\b\w+\b", full_conversation_lower))
+
+    # Determine category using whole-word matching to avoid false substring hits
+    if words & {"password", "login", "locked", "access", "authentication"}:
         category = "access"
         title = "Password/Login Issue"
-    elif any(word in full_conversation_lower for word in ["vpn", "network", "wifi", "internet", "connect", "connection"]):
+    elif words & {"vpn", "network", "wifi", "internet", "connect", "connection"}:
         category = "network"
         title = "Network/VPN Connectivity Issue"
-    elif any(word in full_conversation_lower for word in ["email", "outlook", "mail", "calendar"]):
+    elif words & {"email", "outlook", "mail", "calendar"}:
         category = "email"
         title = "Email/Outlook Issue"
-    elif any(word in full_conversation_lower for word in ["install", "software", "application", "app", "update"]):
+    elif words & {"install", "software", "application", "app", "update"}:
         category = "software"
         title = "Software Installation/Issue"
-    elif any(word in full_conversation_lower for word in ["computer", "laptop", "hardware", "printer", "monitor", "keyboard", "mouse"]):
+    elif words & {"computer", "laptop", "hardware", "printer", "monitor", "keyboard", "mouse"}:
         category = "hardware"
         title = "Hardware Issue"
     else:
@@ -429,8 +453,11 @@ async def chat_with_assistant(request: ChatMessage, background_tasks: Background
     conversation_id = request.conversation_id or str(uuid.uuid4())
     ticket_created = None
     
-    # Get or create conversation history
+    # Get or create conversation history — evict oldest entry when at capacity
     if conversation_id not in conversation_history:
+        if len(conversation_history) >= _MAX_CONVERSATIONS:
+            oldest_id = next(iter(conversation_history))
+            del conversation_history[oldest_id]
         conversation_history[conversation_id] = []
     
     history = conversation_history[conversation_id]
@@ -438,8 +465,9 @@ async def chat_with_assistant(request: ChatMessage, background_tasks: Background
     # Add user message to history
     history.append({"role": "user", "content": request.message})
     
-    # Check if user wants to create a ticket - do this BEFORE calling Claude
-    if should_create_ticket(request.message, history) and len(history) >= 2:
+    # Check if user wants to create a ticket - require at least 3 turns (greeting + 1 troubleshoot + confirm)
+    user_turns = sum(1 for m in history if m["role"] == "user")
+    if should_create_ticket(request.message, history) and user_turns >= 2:
         # Extract issue details from conversation
         issue_info = extract_issue_from_history(history)
         
@@ -478,15 +506,14 @@ async def chat_with_assistant(request: ChatMessage, background_tasks: Background
         
         logger.info("ticket_created_from_chat", ticket_id=ticket_id, conversation_id=conversation_id)
         
-        response_text = f"""I've created support ticket **{ticket_id}** for you with the following details:
-
-**Issue:** {issue_info['title']}
-**Category:** {issue_info['category'].title()}
-**Priority:** {issue_info['priority'].title()}
-
-Our IT team will review your ticket and get back to you soon. You can track its progress in the Tickets tab.
-
-Is there anything else I can help you with?"""
+        response_text = (
+            f"Support ticket {ticket_id} has been created.\n\n"
+            f"Issue: {issue_info['title']}\n"
+            f"Category: {issue_info['category'].title()}\n"
+            f"Priority: {issue_info['priority'].title()}\n\n"
+            "Our IT team will review your ticket shortly. You can track its progress in the Tickets tab.\n\n"
+            "Is there anything else I can help you with?"
+        )
         
         # Add assistant response to history
         history.append({"role": "assistant", "content": response_text})
@@ -521,28 +548,21 @@ Is there anything else I can help you with?"""
             logger.warning("anthropic_client_not_available")
             response_text = generate_fallback_response(request.message)
         else:
-            # Call Claude API with tool use for ticket creation
-            system_prompt = """You are a helpful IT support assistant. Your role is to:
+            # Determine how many user turns have happened
+            user_turns = sum(1 for m in history if m["role"] == "user")
 
-1. Help users troubleshoot IT issues (VPN, passwords, software, hardware, network)
-2. Guide them through common solutions step by step
-3. Create support tickets when needed
+            system_prompt = """You are an IT support assistant. Respond in plain text only — no markdown, no bold (**), no headers (#), no horizontal rules (---), no bullet symbols (•). Use numbered lists like "1." for steps.
 
-IMPORTANT RULES:
-- Be concise (2-4 sentences unless detailed instructions are needed)
-- If the user has already tried basic troubleshooting and it didn't work, IMMEDIATELY offer to create a ticket
-- Don't keep asking for more information if they've clearly explained the problem
-- When the user says "create a ticket", "yes create one", or confirms they want a ticket, acknowledge it directly
+Your approach:
+- First 2 exchanges: actively troubleshoot. Give the user 2-3 concrete steps to try.
+- After 2 exchanges with no resolution, OR if the user has already tried fixes and it still fails: offer to create a support ticket.
+- Only create a ticket when the user explicitly confirms (says "yes", "create it", "please", etc.).
 
-For VPN issues specifically:
-- If user has tried: restarting, reconnecting, different servers, different clients - that's enough troubleshooting
-- Offer to create ticket immediately
+Examples of good troubleshooting responses:
+Account locked: "Let's get you back in. Try these steps: 1. Go to the login page and click Forgot Password. 2. Check your email for a reset link. 3. If you don't receive it within 5 minutes, check your spam folder. Did any of those work?"
+VPN issue: "Let's troubleshoot. 1. Disconnect and reconnect the VPN client. 2. Try restarting your computer and reconnecting. 3. Check if others on your team can connect (to rule out a server issue). Let me know what happens."
 
-Example good response when user has tried everything:
-"I can see you've already tried the standard troubleshooting steps without success. Let me create a support ticket for our IT team to investigate this further. Just say 'create a ticket' to confirm."
-
-Example bad response (don't do this):
-"Let me ask a few more questions..." (when they've already provided details)"""
+Only offer a ticket after trying at least one troubleshooting exchange, or if the user says they've already tried the basics."""
 
             # Build messages for Claude
             messages = []
@@ -553,8 +573,8 @@ Example bad response (don't do this):
                 })
             
             # Call Claude
-            response = anthropic_client.messages.create(
-                model="claude-sonnet-4-20250514",
+            response = await anthropic_client.messages.create(
+                model="claude-sonnet-4-6",
                 max_tokens=500,
                 system=system_prompt,
                 messages=messages
@@ -578,12 +598,13 @@ Example bad response (don't do this):
         }
         
     except Exception as e:
-        logger.error("chat_error", error=str(e), conversation_id=conversation_id)
-        
+        error_detail = f"{type(e).__name__}: {e}"
+        logger.error("chat_error", error=error_detail, conversation_id=conversation_id)
+
         # Fallback response
         fallback = generate_fallback_response(request.message)
         history.append({"role": "assistant", "content": fallback})
-        
+
         return {
             "response": fallback,
             "conversation_id": conversation_id,
@@ -621,22 +642,8 @@ def generate_fallback_response(message: str) -> str:
 
 @app.get("/api/v1/analytics/dashboard", response_model=AnalyticsDashboard)
 async def get_analytics_dashboard():
-    """Get analytics dashboard data."""
-    return AnalyticsDashboard(
-        total_tickets=150,
-        resolved_tickets=120,
-        auto_resolved=85,
-        escalated=15,
-        avg_resolution_time_minutes=12.5,
-        resolution_rate=0.80,
-        top_categories={
-            "access": 45,
-            "network": 35,
-            "software": 30,
-            "hardware": 25,
-            "email": 15
-        }
-    )
+    """Get analytics dashboard data from real ticket state."""
+    return AnalyticsDashboard(**orchestrator.get_analytics())
 
 
 @app.get("/api/v1/analytics/trends")

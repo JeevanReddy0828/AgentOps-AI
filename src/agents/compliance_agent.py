@@ -75,7 +75,7 @@ class ComplianceAgent(BaseAgent):
         super().__init__(AgentConfig(
             name="compliance_agent",
             description="Security and compliance validation",
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             temperature=0.0,  # Deterministic for compliance
             capabilities=[
                 AgentCapability.READ_TICKET,
@@ -266,12 +266,16 @@ REQUIRES_APPROVAL: [yes/no]"""
         if rule.rule_id == "SEC-001":
             if not parameters.get("identity_verified", False):
                 return {"reason": "Identity not verified"}
-        
+
+        if rule.rule_id == "SEC-002":
+            if parameters.get("grants_admin", False):
+                return {"reason": "Admin access requires manager approval"}
+
         if rule.rule_id == "POL-001":
             software_id = parameters.get("software_id")
             if not software_id:
                 return {"reason": "Software ID required"}
-        
+
         return None
     
     def _contains_sensitive_data(self, parameters: Dict[str, Any]) -> bool:

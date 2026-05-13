@@ -41,7 +41,7 @@ class AgentConfig(BaseModel):
     """Configuration for agent initialization."""
     name: str
     description: str
-    model: str = "claude-sonnet-4-20250514"  # Anthropic Claude model
+    model: str = "claude-sonnet-4-6"
     temperature: float = 0.1
     max_tokens: int = 4096
     capabilities: List[AgentCapability] = Field(default_factory=list)
@@ -67,7 +67,7 @@ class AgentContext(BaseModel):
 class BaseAgent(ABC):
     """
     Abstract base class for all AI agents using Anthropic Claude.
-    
+
     Provides:
     - Claude API interaction with configurable models
     - Built-in rate limiting
@@ -76,22 +76,25 @@ class BaseAgent(ABC):
     - Security and compliance validation
     - Observability (tracing, metrics, logging)
     """
-    
-    def __init__(self, config: AgentConfig):
+
+    def __init__(self, config: AgentConfig, compliance_agent: Optional[Any] = None):
         self.config = config
         self.name = config.name
         self.tools: Dict[str, callable] = {}
         self.metrics = MetricsCollector(agent_name=config.name)
-        
+
+        # Injected compliance agent — avoids creating a new one per tool call
+        self._compliance_agent = compliance_agent
+
         # Initialize Anthropic client
         self._client = anthropic.AsyncAnthropic()  # Uses ANTHROPIC_API_KEY env var
-        
+
         # Initialize rate limiter
         self._rate_limiter = RateLimiter(
             requests_per_minute=config.requests_per_minute,
             tokens_per_minute=config.tokens_per_minute
         )
-        
+
         logger.info(
             "agent_initialized",
             agent_name=self.name,
@@ -143,8 +146,11 @@ class BaseAgent(ABC):
         
         # Compliance check before execution
         if self.config.require_compliance_check:
-            from src.agents.compliance_agent import ComplianceAgent
-            compliance = ComplianceAgent()
+            if self._compliance_agent is None:
+                from src.agents.compliance_agent import ComplianceAgent
+                logger.warning("compliance_agent_not_injected_creating_new", agent=self.name)
+                self._compliance_agent = ComplianceAgent()
+            compliance = self._compliance_agent
             is_compliant = await compliance.validate_action(
                 action_type=tool_name,
                 parameters=parameters,
